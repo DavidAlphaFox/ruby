@@ -129,6 +129,11 @@ rb_define_notimplement_method_id(VALUE mod, ID id, rb_method_visibility_t visi)
 void
 rb_add_method_cfunc(VALUE klass, ID mid, VALUE (*func)(ANYARGS), int argc, rb_method_visibility_t visi)
 {
+	// klass is the class we want to add some methods
+	// mid is the name of function
+	// func is the enter point of routine
+	// argc is count of argv
+	// rb_method_visibility_t is visibility in a class
     if (argc < -2 || 15 < argc) rb_raise(rb_eArgError, "arity out of range: %d for -2..15", argc);
     if (func != rb_f_notimplement) {
 	rb_method_cfunc_t opt;
@@ -624,6 +629,7 @@ method_added(VALUE klass, ID mid)
 rb_method_entry_t *
 rb_add_method(VALUE klass, ID mid, rb_method_type_t type, void *opts, rb_method_visibility_t visi)
 {
+	// create a method_enty
     rb_method_entry_t *me = rb_method_entry_make(klass, mid, klass, visi, type, NULL, mid, opts);
 
     if (type != VM_METHOD_TYPE_UNDEF && type != VM_METHOD_TYPE_REFINED) {

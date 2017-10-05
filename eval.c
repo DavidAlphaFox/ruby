@@ -403,9 +403,10 @@ rb_mod_s_constants(int argc, VALUE *argv, VALUE mod)
 void
 rb_frozen_class_p(VALUE klass)
 {
+    // is it a frozen a class ?
     if (SPECIAL_CONST_P(klass)) {
       noclass:
-	Check_Type(klass, T_CLASS);
+	    Check_Type(klass, T_CLASS);
     }
     if (OBJ_FROZEN(klass)) {
 	const char *desc;
@@ -437,7 +438,9 @@ rb_frozen_class_p(VALUE klass)
 	      default:
 		goto noclass;
 	    }
-	}
+    }
+    // if it's a frozen class 
+    // throw some error
 	rb_error_frozen(desc);
     }
 }

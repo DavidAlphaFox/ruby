@@ -1123,6 +1123,7 @@ rb_obj_tap(VALUE obj)
 static VALUE
 rb_obj_dummy(void)
 {
+    // return a nil value of ruby
     return Qnil;
 }
 
@@ -3918,6 +3919,7 @@ InitVM_Object(void)
      */
     rb_mKernel = rb_define_module("Kernel");
     rb_include_module(rb_cObject, rb_mKernel);
+    // Kernel uses include to inherited Object
     rb_define_private_method(rb_cClass, "inherited", rb_obj_dummy, 1);
     rb_define_private_method(rb_cModule, "included", rb_obj_dummy, 1);
     rb_define_private_method(rb_cModule, "extended", rb_obj_dummy, 1);
