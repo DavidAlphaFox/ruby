@@ -161,7 +161,8 @@ rb_class_detach_module_subclasses(VALUE klass)
  */
 static VALUE
 class_alloc(VALUE flags, VALUE klass)
-{
+{   // alloc a space
+    // alloc a context
     NEWOBJ_OF(obj, struct RClass, klass, (flags & T_MASK) | FL_PROMOTED1 /* start from age == 2 */ | (RGENGC_WB_PROTECTED_CLASS ? FL_WB_PROTECTED : 0));
     obj->ptr = ZALLOC(rb_classext_t);
     /* ZALLOC
@@ -200,8 +201,9 @@ RCLASS_M_TBL_INIT(VALUE c)
 VALUE
 rb_class_boot(VALUE super)
 {
+    // alloc a space of rb_cClass 
     VALUE klass = class_alloc(T_CLASS, rb_cClass);
-
+    // modify the superclass of klass
     RCLASS_SET_SUPER(klass, super);
     RCLASS_M_TBL_INIT(klass);
 
@@ -545,6 +547,8 @@ boot_defclass(const char *name, VALUE super)
 void
 Init_class_hierarchy(void)
 {
+    // create BasicObject class without any super
+    // create Object class with BasicObject as super
     rb_cBasicObject = boot_defclass("BasicObject", 0);
     rb_cObject = boot_defclass("Object", rb_cBasicObject);
     rb_gc_register_mark_object(rb_cObject);
@@ -852,7 +856,7 @@ static int include_modules_at(const VALUE klass, VALUE c, VALUE module, int sear
 static void
 ensure_includable(VALUE klass, VALUE module)
 {
-    
+
     rb_frozen_class_p(klass);
     Check_Type(module, T_MODULE);
     if (!NIL_P(rb_refinement_module_get_refined_class(module))) {
