@@ -1,4 +1,4 @@
-# frozen_string_literal: false
+# frozen_string_literal: true
 begin
   require 'ripper'
   require 'test/unit'
@@ -58,6 +58,42 @@ eot
     eos
 
     assert_equal clear_pos(sexp1), clear_pos(sexp2)
+  end
+
+  def test_params_mlhs
+    sexp = Ripper.sexp("proc {|(w, *x, y), z|}")
+    _, ((mlhs, w, (rest, x), y), z) = search_sexp(:params, sexp)
+    assert_equal(:mlhs, mlhs)
+    assert_equal(:@ident, w[0])
+    assert_equal("w", w[1])
+    assert_equal(:rest_param, rest)
+    assert_equal(:@ident, x[0])
+    assert_equal("x", x[1])
+    assert_equal(:@ident, y[0])
+    assert_equal("y", y[1])
+    assert_equal(:@ident, z[0])
+    assert_equal("z", z[1])
+  end
+
+  def test_def_fname
+    sexp = Ripper.sexp("def t; end")
+    _, (type, fname,) = search_sexp(:def, sexp)
+    assert_equal(:@ident, type)
+    assert_equal("t", fname)
+
+    sexp = Ripper.sexp("def <<; end")
+    _, (type, fname,) = search_sexp(:def, sexp)
+    assert_equal(:@op, type)
+    assert_equal("<<", fname)
+  end
+
+  def test_defs_fname
+    sexp = Ripper.sexp("def self.t; end")
+    _, recv, _, (type, fname) = search_sexp(:defs, sexp)
+    assert_equal(:var_ref, recv[0], recv)
+    assert_equal([:@kw, "self", [1, 4]], recv[1], recv)
+    assert_equal(:@ident, type)
+    assert_equal("t", fname)
   end
 
   def search_sexp(sym, sexp)

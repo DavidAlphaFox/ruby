@@ -1,32 +1,24 @@
 # frozen_string_literal: false
 require_relative "utils"
 
-if defined?(OpenSSL::TestUtils)
+if defined?(OpenSSL)
 
 class OpenSSL::TestX509CRL < OpenSSL::TestCase
   def setup
-    @rsa1024 = OpenSSL::TestUtils::TEST_KEY_RSA1024
-    @rsa2048 = OpenSSL::TestUtils::TEST_KEY_RSA2048
-    @dsa256  = OpenSSL::TestUtils::TEST_KEY_DSA256
-    @dsa512  = OpenSSL::TestUtils::TEST_KEY_DSA512
+    super
+    @rsa1024 = Fixtures.pkey("rsa1024")
+    @rsa2048 = Fixtures.pkey("rsa2048")
+    @dsa256  = Fixtures.pkey("dsa256")
+    @dsa512  = Fixtures.pkey("dsa512")
     @ca = OpenSSL::X509::Name.parse("/DC=org/DC=ruby-lang/CN=CA")
     @ee1 = OpenSSL::X509::Name.parse("/DC=org/DC=ruby-lang/CN=EE1")
     @ee2 = OpenSSL::X509::Name.parse("/DC=org/DC=ruby-lang/CN=EE2")
   end
 
-  def issue_crl(*args)
-    OpenSSL::TestUtils.issue_crl(*args)
-  end
-
-  def issue_cert(*args)
-    OpenSSL::TestUtils.issue_cert(*args)
-  end
-
   def test_basic
     now = Time.at(Time.now.to_i)
 
-    cert = issue_cert(@ca, @rsa2048, 1, now, now+3600, [],
-                      nil, nil, OpenSSL::Digest::SHA1.new)
+    cert = issue_cert(@ca, @rsa2048, 1, [], nil, nil)
     crl = issue_crl([], 1, now, now+1600, [],
                     cert, @rsa2048, OpenSSL::Digest::SHA1.new)
     assert_equal(1, crl.version)
@@ -63,8 +55,7 @@ class OpenSSL::TestX509CRL < OpenSSL::TestCase
       [4, now,                 4],
       [5, now,                 5],
     ]
-    cert = issue_cert(@ca, @rsa2048, 1, Time.now, Time.now+3600, [],
-                      nil, nil, OpenSSL::Digest::SHA1.new)
+    cert = issue_cert(@ca, @rsa2048, 1, [], nil, nil)
     crl = issue_crl(revoke_info, 1, Time.now, Time.now+1600, [],
                     cert, @rsa2048, OpenSSL::Digest::SHA1.new)
     revoked = crl.revoked
@@ -131,8 +122,7 @@ class OpenSSL::TestX509CRL < OpenSSL::TestCase
       ["issuerAltName", "issuer:copy", false],
     ]
 
-    cert = issue_cert(@ca, @rsa2048, 1, Time.now, Time.now+3600, cert_exts,
-                      nil, nil, OpenSSL::Digest::SHA1.new)
+    cert = issue_cert(@ca, @rsa2048, 1, cert_exts, nil, nil)
     crl = issue_crl([], 1, Time.now, Time.now+1600, crl_exts,
                     cert, @rsa2048, OpenSSL::Digest::SHA1.new)
     exts = crl.extensions
@@ -168,8 +158,7 @@ class OpenSSL::TestX509CRL < OpenSSL::TestCase
   end
 
   def test_crlnumber
-    cert = issue_cert(@ca, @rsa2048, 1, Time.now, Time.now+3600, [],
-                      nil, nil, OpenSSL::Digest::SHA1.new)
+    cert = issue_cert(@ca, @rsa2048, 1, [], nil, nil)
     crl = issue_crl([], 1, Time.now, Time.now+1600, [],
                     cert, @rsa2048, OpenSSL::Digest::SHA1.new)
     assert_match(1.to_s, crl.extensions[0].value)
@@ -187,8 +176,7 @@ class OpenSSL::TestX509CRL < OpenSSL::TestCase
   end
 
   def test_sign_and_verify
-    cert = issue_cert(@ca, @rsa2048, 1, Time.now, Time.now+3600, [],
-                      nil, nil, OpenSSL::Digest::SHA1.new)
+    cert = issue_cert(@ca, @rsa2048, 1, [], nil, nil)
     crl = issue_crl([], 1, Time.now, Time.now+1600, [],
                     cert, @rsa2048, OpenSSL::Digest::SHA1.new)
     assert_equal(false, crl.verify(@rsa1024))
@@ -198,10 +186,9 @@ class OpenSSL::TestX509CRL < OpenSSL::TestCase
     crl.version = 0
     assert_equal(false, crl.verify(@rsa2048))
 
-    cert = issue_cert(@ca, @dsa512, 1, Time.now, Time.now+3600, [],
-                      nil, nil, OpenSSL::TestUtils::DSA_SIGNATURE_DIGEST.new)
+    cert = issue_cert(@ca, @dsa512, 1, [], nil, nil)
     crl = issue_crl([], 1, Time.now, Time.now+1600, [],
-                    cert, @dsa512, OpenSSL::TestUtils::DSA_SIGNATURE_DIGEST.new)
+                    cert, @dsa512, OpenSSL::Digest::SHA1.new)
     assert_equal(false, crl_error_returns_false { crl.verify(@rsa1024) })
     assert_equal(false, crl_error_returns_false { crl.verify(@rsa2048) })
     assert_equal(false, crl.verify(@dsa256))

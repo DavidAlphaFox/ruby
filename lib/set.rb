@@ -3,7 +3,7 @@
 #
 # set.rb - defines the Set class
 #++
-# Copyright (c) 2002-2013 Akinori MUSHA <knu@iDaemons.org>
+# Copyright (c) 2002-2016 Akinori MUSHA <knu@iDaemons.org>
 #
 # Documentation by Akinori MUSHA and Gavin Sinclair.
 #
@@ -37,7 +37,8 @@
 # Set uses Hash as storage, so you must note the following points:
 #
 # * Equality of elements is determined according to Object#eql? and
-#   Object#hash.
+#   Object#hash.  Use Set#compare_by_identity to make a set compare
+#   its elements by their identity.
 # * Set assumes that the identity of each element does not change
 #   while it is stored.  Modifying an element of a set will render the
 #   set to an unreliable state.
@@ -89,6 +90,23 @@ class Set
     else
       merge(enum)
     end
+  end
+
+  # Makes the set compare its elements by their identity and returns
+  # self.  This method may not be supported by all subclasses of Set.
+  def compare_by_identity
+    if @hash.respond_to?(:compare_by_identity)
+      @hash.compare_by_identity
+      self
+    else
+      raise NotImplementedError, "#{self.class.name}\##{__method__} is not implemented"
+    end
+  end
+
+  # Returns true if the set will compare its elements by their
+  # identity.  Also see Set#compare_by_identity.
+  def compare_by_identity?
+    @hash.respond_to?(:compare_by_identity?) && @hash.compare_by_identity?
   end
 
   def do_with_enum(enum, &block) # :nodoc:
@@ -457,6 +475,23 @@ class Set
     @hash.eql?(o.instance_variable_get(:@hash))
   end
 
+  # Returns true if obj is a member of the set, and false otherwise.
+  #
+  # Used in case statements:
+  #
+  #   case :apple
+  #   when Set[:potato, :carrot] then 'vegetable'
+  #   when Set[:apple, :banana]  then 'fruit'
+  #   end
+  #   #=> "fruit"
+  #
+  # Or by itself:
+  #
+  #   Set[1, 2, 3] === 2 #=> true
+  #   Set[1, 2, 3] === 4 #=> false
+  #
+  alias === include?
+
   # Classifies the set by the return value of the given block and
   # returns a hash of {value => set of elements} pairs.  The block is
   # called once for each element of the set, passing the element as
@@ -550,6 +585,8 @@ class Set
       ids.pop
     end
   end
+
+  alias to_s inspect
 
   def pretty_print(pp)  # :nodoc:
     pp.text sprintf('#<%s: {', self.class.name)

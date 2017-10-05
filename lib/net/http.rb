@@ -489,6 +489,24 @@ module Net   #:nodoc:
       end
     end
 
+    # Posts data to the specified URI object.
+    #
+    # Example:
+    #
+    #   require 'net/http'
+    #   require 'uri'
+    #
+    #   Net::HTTP.post URI('http://www.example.com/api/search'),
+    #                  { "q" => "ruby", "max" => "50" }.to_json,
+    #                  "Content-Type" => "application/json"
+    #
+    def HTTP.post(url, data, header = nil)
+      start(url.hostname, url.port,
+            :use_ssl => url.scheme == 'https' ) {|http|
+        http.post(url, data, header)
+      }
+    end
+
     # Posts HTML form data to the specified URI object.
     # The form data must be provided as a Hash mapping from String to String.
     # Example:
@@ -542,7 +560,7 @@ module Net   #:nodoc:
 
     # :call-seq:
     #   HTTP.start(address, port, p_addr, p_port, p_user, p_pass, &block)
-    #   HTTP.start(address, port=nil, p_addr=nil, p_port=nil, p_user=nil, p_pass=nil, opt, &block)
+    #   HTTP.start(address, port=nil, p_addr=:ENV, p_port=nil, p_user=nil, p_pass=nil, opt, &block)
     #
     # Creates a new Net::HTTP object, then additionally opens the TCP
     # connection and HTTP session.
@@ -573,6 +591,7 @@ module Net   #:nodoc:
     def HTTP.start(address, *arg, &block) # :yield: +http+
       arg.pop if opt = Hash.try_convert(arg[-1])
       port, p_addr, p_port, p_user, p_pass = *arg
+      p_addr = :ENV if arg.size < 2
       port = https_default_port if !port && opt && opt[:use_ssl]
       http = new(address, port, p_addr, p_port, p_user, p_pass)
 
@@ -610,10 +629,11 @@ module Net   #:nodoc:
     #
     # If you are connecting to a custom proxy, +p_addr+ the DNS name or IP
     # address of the proxy host, +p_port+ the port to use to access the proxy,
-    # and +p_user+ and +p_pass+ the username and password if authorization is
-    # required to use the proxy.
+    # +p_user+ and +p_pass+ the username and password if authorization is
+    # required to use the proxy, and p_no_proxy spcifies hosts which doesn't
+    # use the proxy.
     #
-    def HTTP.new(address, port = nil, p_addr = :ENV, p_port = nil, p_user = nil, p_pass = nil)
+    def HTTP.new(address, port = nil, p_addr = :ENV, p_port = nil, p_user = nil, p_pass = nil, p_no_proxy = nil)
       http = super address, port
 
       if proxy_class? then # from Net::HTTP::Proxy()
@@ -625,6 +645,10 @@ module Net   #:nodoc:
       elsif p_addr == :ENV then
         http.proxy_from_env = true
       else
+        if p_addr && p_no_proxy && !URI::Generic.use_proxy?(p_addr, p_addr, p_port, p_no_proxy)
+          p_addr = nil
+          p_port = nil
+        end
         http.proxy_address = p_addr
         http.proxy_port    = p_port || default_port
         http.proxy_user    = p_user
@@ -651,6 +675,7 @@ module Net   #:nodoc:
       @open_timeout = 60
       @read_timeout = 60
       @continue_timeout = nil
+      @max_retries = 1
       @debug_output = nil
 
       @proxy_from_env = false
@@ -716,6 +741,22 @@ module Net   #:nodoc:
     # seconds. If the HTTP object cannot read data in this many seconds,
     # it raises a Net::ReadTimeout exception. The default value is 60 seconds.
     attr_reader :read_timeout
+
+    # Maximum number of times to retry an idempotent request in case of
+    # Net::ReadTimeout, IOError, EOFError, Errno::ECONNRESET,
+    # Errno::ECONNABORTED, Errno::EPIPE, OpenSSL::SSL::SSLError,
+    # Timeout::Error.
+    # Should be non-negative integer number. Zero means no retries.
+    # The default value is 1.
+    def max_retries=(retries)
+      retries = retries.to_int
+      if retries < 0
+        raise ArgumentError, 'max_retries should be non-negative integer number'
+      end
+      @max_retries = retries
+    end
+
+    attr_reader :max_retries
 
     # Setter for the read_timeout attribute.
     def read_timeout=(sec)
@@ -892,6 +933,22 @@ module Net   #:nodoc:
       s.setsockopt(Socket::IPPROTO_TCP, Socket::TCP_NODELAY, 1)
       D "opened"
       if use_ssl?
+        if proxy?
+          plain_sock = BufferedIO.new(s, read_timeout: @read_timeout,
+                                      continue_timeout: @continue_timeout,
+                                      debug_output: @debug_output)
+          buf = "CONNECT #{@address}:#{@port} HTTP/#{HTTPVersion}\r\n"
+          buf << "Host: #{@address}:#{@port}\r\n"
+          if proxy_user
+            credential = ["#{proxy_user}:#{proxy_pass}"].pack('m0')
+            buf << "Proxy-Authorization: Basic #{credential}\r\n"
+          end
+          buf << "\r\n"
+          plain_sock.write(buf)
+          HTTPResponse.read_new(plain_sock).value
+          # assuming nothing left in buffers after successful CONNECT response
+        end
+
         ssl_parameters = Hash.new
         iv_list = instance_variables
         SSL_IVNAMES.each_with_index do |ivname, i|
@@ -905,57 +962,29 @@ module Net   #:nodoc:
         D "starting SSL for #{conn_address}:#{conn_port}..."
         s = OpenSSL::SSL::SSLSocket.new(s, @ssl_context)
         s.sync_close = true
+        # Server Name Indication (SNI) RFC 3546
+        s.hostname = @address if s.respond_to? :hostname=
+        if @ssl_session and
+           Process.clock_gettime(Process::CLOCK_REALTIME) < @ssl_session.time.to_f + @ssl_session.timeout
+          s.session = @ssl_session if @ssl_session
+        end
+        ssl_socket_connect(s, @open_timeout)
+        if @ssl_context.verify_mode != OpenSSL::SSL::VERIFY_NONE
+          s.post_connection_check(@address)
+        end
+        @ssl_session = s.session
         D "SSL established"
       end
-      @socket = BufferedIO.new(s)
-      @socket.read_timeout = @read_timeout
-      @socket.continue_timeout = @continue_timeout
-      @socket.debug_output = @debug_output
-      if use_ssl?
-        begin
-          if proxy?
-            buf = "CONNECT #{@address}:#{@port} HTTP/#{HTTPVersion}\r\n"
-            buf << "Host: #{@address}:#{@port}\r\n"
-            if proxy_user
-              credential = ["#{proxy_user}:#{proxy_pass}"].pack('m0')
-              buf << "Proxy-Authorization: Basic #{credential}\r\n"
-            end
-            buf << "\r\n"
-            @socket.write(buf)
-            HTTPResponse.read_new(@socket).value
-          end
-          # Server Name Indication (SNI) RFC 3546
-          s.hostname = @address if s.respond_to? :hostname=
-          if @ssl_session and
-             Process.clock_gettime(Process::CLOCK_REALTIME) < @ssl_session.time.to_f + @ssl_session.timeout
-            s.session = @ssl_session if @ssl_session
-          end
-          if timeout = @open_timeout
-            while true
-              raise Net::OpenTimeout if timeout <= 0
-              start = Process.clock_gettime Process::CLOCK_MONOTONIC
-              # to_io is required because SSLSocket doesn't have wait_readable yet
-              case s.connect_nonblock(exception: false)
-              when :wait_readable; s.to_io.wait_readable(timeout)
-              when :wait_writable; s.to_io.wait_writable(timeout)
-              else; break
-              end
-              timeout -= Process.clock_gettime(Process::CLOCK_MONOTONIC) - start
-            end
-          else
-            s.connect
-          end
-          if @ssl_context.verify_mode != OpenSSL::SSL::VERIFY_NONE
-            s.post_connection_check(@address)
-          end
-          @ssl_session = s.session
-        rescue => exception
-          D "Conn close because of connect error #{exception}"
-          @socket.close if @socket and not @socket.closed?
-          raise exception
-        end
-      end
+      @socket = BufferedIO.new(s, read_timeout: @read_timeout,
+                               continue_timeout: @continue_timeout,
+                               debug_output: @debug_output)
       on_connect
+    rescue => exception
+      if s
+        D "Conn close because of connect error #{exception}"
+        s.close
+      end
+      raise
     end
     private :connect
 
@@ -972,7 +1001,7 @@ module Net   #:nodoc:
 
     def do_finish
       @started = false
-      @socket.close if @socket and not @socket.closed?
+      @socket.close if @socket
       @socket = nil
     end
     private :do_finish
@@ -1074,14 +1103,29 @@ module Net   #:nodoc:
       end
     end
 
-    # The proxy username, if one is configured
-    def proxy_user
-      @proxy_user
+    # [Bug #12921]
+    if /linux|freebsd|darwin/ =~ RUBY_PLATFORM
+      ENVIRONMENT_VARIABLE_IS_MULTIUSER_SAFE = true
+    else
+      ENVIRONMENT_VARIABLE_IS_MULTIUSER_SAFE = false
     end
 
-    # The proxy password, if one is configured
+    # The username of the proxy server, if one is configured.
+    def proxy_user
+      if ENVIRONMENT_VARIABLE_IS_MULTIUSER_SAFE && @proxy_from_env
+        proxy_uri&.user
+      else
+        @proxy_user
+      end
+    end
+
+    # The password of the proxy server, if one is configured.
     def proxy_pass
-      @proxy_pass
+      if ENVIRONMENT_VARIABLE_IS_MULTIUSER_SAFE && @proxy_from_env
+        proxy_uri&.password
+      else
+        @proxy_pass
+      end
     end
 
     alias proxyaddr proxy_address   #:nodoc: obsolete
@@ -1439,7 +1483,7 @@ module Net   #:nodoc:
           begin
             res = HTTPResponse.read_new(@socket)
             res.decode_content = req.decode_content
-          end while res.kind_of?(HTTPContinue)
+          end while res.kind_of?(HTTPInformation)
 
           res.uri = req.uri
 
@@ -1455,14 +1499,14 @@ module Net   #:nodoc:
              # avoid a dependency on OpenSSL
              defined?(OpenSSL::SSL) ? OpenSSL::SSL::SSLError : IOError,
              Timeout::Error => exception
-        if count == 0 && IDEMPOTENT_METHODS_.include?(req.method)
+        if count < max_retries && IDEMPOTENT_METHODS_.include?(req.method)
           count += 1
-          @socket.close if @socket and not @socket.closed?
+          @socket.close if @socket
           D "Conn close because of error #{exception}, and retry"
           retry
         end
         D "Conn close because of error #{exception}"
-        @socket.close if @socket and not @socket.closed?
+        @socket.close if @socket
         raise
       end
 
@@ -1470,7 +1514,7 @@ module Net   #:nodoc:
       res
     rescue => exception
       D "Conn close because of error #{exception}"
-      @socket.close if @socket and not @socket.closed?
+      @socket.close if @socket
       raise exception
     end
 

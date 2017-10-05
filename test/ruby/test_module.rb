@@ -440,6 +440,10 @@ class TestModule < Test::Unit::TestCase
     EOS
   end
 
+  def test_include_with_no_args
+    assert_raise(ArgumentError) { Module.new { include } }
+  end
+
   def test_included_modules
     assert_equal([], Mixin.included_modules)
     assert_equal([Mixin], User.included_modules)
@@ -451,7 +455,7 @@ class TestModule < Test::Unit::TestCase
   end
 
   def test_instance_methods
-    assert_equal([:user, :user2], User.instance_methods(false))
+    assert_equal([:user, :user2], User.instance_methods(false).sort)
     assert_equal([:user, :user2, :mixin].sort, User.instance_methods(true).sort)
     assert_equal([:mixin], Mixin.instance_methods)
     assert_equal([:mixin], Mixin.instance_methods(true))
@@ -1868,6 +1872,10 @@ class TestModule < Test::Unit::TestCase
     end;
   end
 
+  def test_prepend_module_with_no_args
+    assert_raise(ArgumentError) { Module.new { prepend } }
+  end
+
   def test_class_variables
     m = Module.new
     m.class_variable_set(:@@foo, 1)
@@ -1932,6 +1940,10 @@ class TestModule < Test::Unit::TestCase
 
     assert_nothing_raised(NoMethodError, Bug6891) {Class.new(x)}
     assert_equal(['public', 'protected'], list)
+  end
+
+  def test_extend_module_with_no_args
+    assert_raise(ArgumentError) { Module.new { extend } }
   end
 
   def test_invalid_attr

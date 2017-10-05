@@ -30,23 +30,46 @@ module RDoc::TokenStream
     token_stream.map do |t|
       next unless t
 
-      style = case t
-              when RDoc::RubyToken::TkCONSTANT then 'ruby-constant'
-              when RDoc::RubyToken::TkKW       then 'ruby-keyword'
-              when RDoc::RubyToken::TkIVAR     then 'ruby-ivar'
-              when RDoc::RubyToken::TkOp       then 'ruby-operator'
-              when RDoc::RubyToken::TkId       then 'ruby-identifier'
-              when RDoc::RubyToken::TkNode     then 'ruby-node'
-              when RDoc::RubyToken::TkCOMMENT  then 'ruby-comment'
-              when RDoc::RubyToken::TkREGEXP   then 'ruby-regexp'
-              when RDoc::RubyToken::TkSTRING   then 'ruby-string'
-              when RDoc::RubyToken::TkVal      then 'ruby-value'
+      style = case t[:kind]
+              when :on_const   then 'ruby-constant'
+              when :on_kw      then 'ruby-keyword'
+              when :on_ivar    then 'ruby-ivar'
+              when :on_cvar    then 'ruby-identifier'
+              when :on_gvar    then 'ruby-identifier'
+              when '=' != t[:text] && :on_op then
+                if RDoc::RipperStateLex::EXPR_ARG == t[:state] then
+                                    'ruby-identifier'
+                else
+                                    'ruby-operator'
+                end
+              when :on_tlambda then 'ruby-operator'
+              when :on_ident   then 'ruby-identifier'
+              when :on_label   then 'ruby-value'
+              when :on_backref, :on_dstring
+                               then 'ruby-node'
+              when :on_comment then 'ruby-comment'
+              when :on_embdoc  then 'ruby-comment'
+              when :on_regexp  then 'ruby-regexp'
+              when :on_tstring then 'ruby-string'
+              when :on_int, :on_float,
+                   :on_rational, :on_imaginary,
+                   :on_heredoc,
+                   :on_symbol, :on_CHAR then 'ruby-value'
+              when :on_heredoc_beg, :on_heredoc_end
+                               then 'ruby-identifier'
               end
 
-      text = CGI.escapeHTML t.text
+      comment_with_nl = false
+      if :on_comment == t[:kind] or :on_embdoc == t[:kind] or :on_heredoc_end == t[:kind]
+        comment_with_nl = true if "\n" == t[:text][-1]
+        text = t[:text].rstrip
+      else
+        text = t[:text]
+      end
+      text = CGI.escapeHTML text
 
       if style then
-        "<span class=\"#{style}\">#{text}</span>"
+        "<span class=\"#{style}\">#{text}</span>#{"\n" if comment_with_nl}"
       else
         text
       end

@@ -12,45 +12,11 @@
 
 #include "ruby/config.h"
 
-/* added in 0.9.8X */
-#if !defined(HAVE_EVP_CIPHER_CTX_NEW)
-EVP_CIPHER_CTX *EVP_CIPHER_CTX_new(void);
-#endif
-
-#if !defined(HAVE_EVP_CIPHER_CTX_FREE)
-void EVP_CIPHER_CTX_free(EVP_CIPHER_CTX *ctx);
-#endif
-
-/* added in 1.0.0 */
-#if !defined(HAVE_EVP_PKEY_BASE_ID)
-#  define EVP_PKEY_base_id(pkey) EVP_PKEY_type((pkey)->type)
-#endif
-
-#if !defined(HAVE_EVP_CIPHER_CTX_COPY)
-int EVP_CIPHER_CTX_copy(EVP_CIPHER_CTX *out, const EVP_CIPHER_CTX *in);
-#endif
-
-#if !defined(HAVE_HMAC_CTX_COPY)
-int HMAC_CTX_copy(HMAC_CTX *out, HMAC_CTX *in);
-#endif
-
-#if !defined(HAVE_X509_STORE_CTX_GET0_CURRENT_CRL)
-#  define X509_STORE_CTX_get0_current_crl(x) ((x)->current_crl)
-#endif
-
-#if !defined(HAVE_X509_STORE_SET_VERIFY_CB)
-#  define X509_STORE_set_verify_cb X509_STORE_set_verify_cb_func
-#endif
-
-#if !defined(HAVE_I2D_ASN1_SET_ANY)
-#  define i2d_ASN1_SET_ANY(sk, x) i2d_ASN1_SET_OF_ASN1_TYPE((sk), (x), \
-		i2d_ASN1_TYPE, V_ASN1_SET, V_ASN1_UNIVERSAL, 0)
-#endif
-
 /* added in 1.0.2 */
 #if !defined(OPENSSL_NO_EC)
 #if !defined(HAVE_EC_CURVE_NIST2NID)
-int EC_curve_nist2nid(const char *);
+int ossl_EC_curve_nist2nid(const char *);
+#  define EC_curve_nist2nid ossl_EC_curve_nist2nid
 #endif
 #endif
 
@@ -89,11 +55,13 @@ int EC_curve_nist2nid(const char *);
 #endif
 
 #if !defined(HAVE_HMAC_CTX_NEW)
-HMAC_CTX *HMAC_CTX_new(void);
+HMAC_CTX *ossl_HMAC_CTX_new(void);
+#  define HMAC_CTX_new ossl_HMAC_CTX_new
 #endif
 
 #if !defined(HAVE_HMAC_CTX_FREE)
-void HMAC_CTX_free(HMAC_CTX *ctx);
+void ossl_HMAC_CTX_free(HMAC_CTX *);
+#  define HMAC_CTX_free ossl_HMAC_CTX_free
 #endif
 
 #if !defined(HAVE_X509_STORE_GET_EX_DATA)
@@ -110,11 +78,13 @@ void HMAC_CTX_free(HMAC_CTX *ctx);
 #endif
 
 #if !defined(HAVE_X509_CRL_GET0_SIGNATURE)
-void X509_CRL_get0_signature(const X509_CRL *, const ASN1_BIT_STRING **, const X509_ALGOR **);
+void ossl_X509_CRL_get0_signature(const X509_CRL *, const ASN1_BIT_STRING **, const X509_ALGOR **);
+#  define X509_CRL_get0_signature ossl_X509_CRL_get0_signature
 #endif
 
 #if !defined(HAVE_X509_REQ_GET0_SIGNATURE)
-void X509_REQ_get0_signature(const X509_REQ *, const ASN1_BIT_STRING **, const X509_ALGOR **);
+void ossl_X509_REQ_get0_signature(const X509_REQ *, const ASN1_BIT_STRING **, const X509_ALGOR **);
+#  define X509_REQ_get0_signature ossl_X509_REQ_get0_signature
 #endif
 
 #if !defined(HAVE_X509_REVOKED_GET0_SERIALNUMBER)
@@ -228,7 +198,7 @@ IMPL_PKEY_GETTER(EC_KEY, ec)
 #undef IMPL_KEY_ACCESSOR3
 #endif /* HAVE_OPAQUE_OPENSSL */
 
-#if defined(HAVE_AUTHENTICATED_ENCRYPTION) && !defined(EVP_CTRL_AEAD_GET_TAG)
+#if !defined(EVP_CTRL_AEAD_GET_TAG)
 #  define EVP_CTRL_AEAD_GET_TAG EVP_CTRL_GCM_GET_TAG
 #  define EVP_CTRL_AEAD_SET_TAG EVP_CTRL_GCM_SET_TAG
 #  define EVP_CTRL_AEAD_SET_IVLEN EVP_CTRL_GCM_SET_IVLEN
@@ -239,6 +209,10 @@ IMPL_PKEY_GETTER(EC_KEY, ec)
 #  define X509_get0_notAfter(x) X509_get_notAfter(x)
 #  define X509_CRL_get0_lastUpdate(x) X509_CRL_get_lastUpdate(x)
 #  define X509_CRL_get0_nextUpdate(x) X509_CRL_get_nextUpdate(x)
+#endif
+
+#if !defined(HAVE_SSL_SESSION_GET_PROTOCOL_VERSION)
+#  define SSL_SESSION_get_protocol_version(s) ((s)->ssl_version)
 #endif
 
 #endif /* _OSSL_OPENSSL_MISSING_H_ */

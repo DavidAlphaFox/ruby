@@ -1,10 +1,11 @@
 # frozen_string_literal: false
 require_relative 'utils'
 
-if defined?(OpenSSL::TestUtils)
+if defined?(OpenSSL)
 
 class OpenSSL::TestX509Extension < OpenSSL::TestCase
   def setup
+    super
     @basic_constraints_value = OpenSSL::ASN1::Sequence([
       OpenSSL::ASN1::Boolean(true),   # CA
       OpenSSL::ASN1::Integer(2)       # pathlen

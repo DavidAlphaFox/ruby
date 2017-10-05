@@ -133,6 +133,50 @@ class TestHash < Test::Unit::TestCase
     assert_equal(100, h['a'])
     assert_equal(200, h['b'])
     assert_nil(h['c'])
+
+    h = @cls["a", 100, "b", 200]
+    assert_equal(100, h['a'])
+    assert_equal(200, h['b'])
+    assert_nil(h['c'])
+
+    h = @cls[[["a", 100], ["b", 200]]]
+    assert_equal(100, h['a'])
+    assert_equal(200, h['b'])
+    assert_nil(h['c'])
+
+    h = @cls[[["a", 100], ["b"], ["c", 300]]]
+    assert_equal(100, h['a'])
+    assert_equal(nil, h['b'])
+    assert_equal(300, h['c'])
+
+    h = @cls[[["a", 100], "b", ["c", 300]]]
+    assert_equal(100, h['a'])
+    assert_equal(nil, h['b'])
+    assert_equal(300, h['c'])
+  end
+
+  def test_s_AREF_duplicated_key
+    alist = [["a", 100], ["b", 200], ["a", 300], ["a", 400]]
+    h = @cls[alist]
+    assert_equal(2, h.size)
+    assert_equal(400, h['a'])
+    assert_equal(200, h['b'])
+    assert_nil(h['c'])
+    assert_equal(nil, h.key('300'))
+  end
+
+  def test_s_AREF_frozen_key_id
+    key = "a".freeze
+    h = @cls[key, 100]
+    assert_equal(100, h['a'])
+    assert_same(key, *h.keys)
+  end
+
+  def test_s_AREF_key_tampering
+    key = "a".dup
+    h = @cls[key, 100]
+    key.upcase!
+    assert_equal(100, h['a'])
   end
 
   def test_s_new
@@ -145,7 +189,6 @@ class TestHash < Test::Unit::TestCase
     assert_instance_of(@cls, h)
     assert_equal('default', h.default)
     assert_equal('default', h['spurious'])
-
   end
 
   def test_try_convert
@@ -237,11 +280,35 @@ class TestHash < Test::Unit::TestCase
     assert_same a.keys[0], b.keys[0]
   end
 
+  def test_hash_aset_fstring_identity
+    h = {}.compare_by_identity
+    h['abc'] = 1
+    h['abc'] = 2
+    assert_equal 2, h.size, '[ruby-core:78783] [Bug #12855]'
+  end
+
+  def test_hash_aref_fstring_identity
+    h = {}.compare_by_identity
+    h['abc'] = 1
+    assert_nil h['abc'], '[ruby-core:78783] [Bug #12855]'
+  end
+
   def test_NEWHASH_fstring_key
     a = {"ABC" => :t}
     b = {"ABC" => :t}
     assert_same a.keys[0], b.keys[0]
     assert_same "ABC".freeze, a.keys[0]
+  end
+
+  def test_tainted_string_key
+    str = 'str'.taint
+    h = {}
+    h[str] = nil
+    key = h.keys.first
+    assert_equal true, str.tainted?
+    assert_equal false, str.frozen?
+    assert_equal true, key.tainted?
+    assert_equal true, key.frozen?
   end
 
   def test_EQUAL # '=='
@@ -354,6 +421,15 @@ class TestHash < Test::Unit::TestCase
     assert_equal({1=>2,3=>4,5=>6}, h.keep_if{true})
   end
 
+  def test_compact
+    h = @cls[a: 1, b: nil, c: false, d: true, e: nil]
+    assert_equal({a: 1, c: false, d: true}, h.compact)
+    assert_equal({a: 1, b: nil, c: false, d: true, e: nil}, h)
+    assert_same(h, h.compact!)
+    assert_equal({a: 1, c: false, d: true}, h)
+    assert_nil(h.compact!)
+  end
+
   def test_dup
     for taint in [ false, true ]
       for frozen in [ false, true ]
@@ -455,6 +531,8 @@ class TestHash < Test::Unit::TestCase
     e = assert_raise(KeyError) { @h.fetch('gumby'*20) }
     assert_match(/key not found: "gumbygumby/, e.message)
     assert_match(/\.\.\.\z/, e.message)
+    assert_same(@h, e.receiver)
+    assert_equal('gumby'*20, e.key)
   end
 
   def test_key2?
@@ -515,9 +593,11 @@ class TestHash < Test::Unit::TestCase
     assert_equal(4, res.length)
     assert_equal %w( three two one nil ), res
 
-    assert_raise KeyError do
+    e = assert_raise KeyError do
       @h.fetch_values(3, 'invalid')
     end
+    assert_same(@h, e.receiver)
+    assert_equal('invalid', e.key)
 
     res = @h.fetch_values(3, 'invalid') { |k| k.upcase }
     assert_equal %w( three INVALID ), res
@@ -817,7 +897,7 @@ class TestHash < Test::Unit::TestCase
     assert_equal([], expected - vals)
   end
 
-  def test_intialize_wrong_arguments
+  def test_initialize_wrong_arguments
     assert_raise(ArgumentError) do
       Hash.new(0) { }
     end
@@ -1174,7 +1254,7 @@ class TestHash < Test::Unit::TestCase
     assert_equal({o=>1}.hash, @cls[o=>1].hash)
   end
 
-  def test_hash_poped
+  def test_hash_popped
     assert_nothing_raised { eval("a = 1; @cls[a => a]; a") }
   end
 
@@ -1293,7 +1373,7 @@ class TestHash < Test::Unit::TestCase
     assert_no_memory_leak([], prepare, code, bug9187)
   end
 
-  def test_wrapper_of_special_const
+  def test_wrapper
     bug9381 = '[ruby-core:59638] [Bug #9381]'
 
     wrapper = Class.new do
@@ -1314,11 +1394,50 @@ class TestHash < Test::Unit::TestCase
       5, true, false, nil,
       0.0, 1.72723e-77,
       :foo, "dsym_#{self.object_id.to_s(16)}_#{Time.now.to_i.to_s(16)}".to_sym,
+      "str",
     ].select do |x|
       hash = {x => bug9381}
       hash[wrapper.new(x)] != bug9381
     end
     assert_empty(bad, bug9381)
+  end
+
+  def assert_hash_random(obj, dump = obj.inspect)
+    a = [obj.hash.to_s]
+    3.times {
+      assert_in_out_err(["-e", "print (#{dump}).hash"], "") do |r, e|
+        a += r
+        assert_equal([], e)
+      end
+    }
+    assert_not_equal([obj.hash.to_s], a.uniq)
+    assert_operator(a.uniq.size, :>, 2, proc {a.inspect})
+  end
+
+  def test_string_hash_random
+    assert_hash_random('abc')
+  end
+
+  def test_symbol_hash_random
+    assert_hash_random(:-)
+    assert_hash_random(:foo)
+    assert_hash_random("dsym_#{self.object_id.to_s(16)}_#{Time.now.to_i.to_s(16)}".to_sym)
+  end
+
+  def test_integer_hash_random
+    assert_hash_random(0)
+    assert_hash_random(+1)
+    assert_hash_random(-1)
+    assert_hash_random(+(1<<100))
+    assert_hash_random(-(1<<100))
+  end
+
+  def test_float_hash_random
+    assert_hash_random(0.0)
+    assert_hash_random(+1.0)
+    assert_hash_random(-1.0)
+    assert_hash_random(1.72723e-77)
+    assert_hash_random(Float::INFINITY, "Float::INFINITY")
   end
 
   def test_label_syntax
@@ -1413,6 +1532,34 @@ class TestHash < Test::Unit::TestCase
     }
 
     assert_equal([10, 20, 30], [1, 2, 3].map(&h))
+  end
+
+  def test_transform_keys
+    x = @cls[a: 1, b: 2, c: 3]
+    y = x.transform_keys {|k| :"#{k}!" }
+    assert_equal({a: 1, b: 2, c: 3}, x)
+    assert_equal({a!: 1, b!: 2, c!: 3}, y)
+
+    enum = x.transform_keys
+    assert_equal(x.size, enum.size)
+    assert_instance_of(Enumerator, enum)
+
+    y = x.transform_keys.with_index {|k, i| "#{k}.#{i}" }
+    assert_equal(%w(a.0 b.1 c.2), y.keys)
+  end
+
+  def test_transform_keys_bang
+    x = @cls[a: 1, b: 2, c: 3]
+    y = x.transform_keys! {|k| :"#{k}!" }
+    assert_equal({a!: 1, b!: 2, c!: 3}, x)
+    assert_same(x, y)
+
+    enum = x.transform_keys!
+    assert_equal(x.size, enum.size)
+    assert_instance_of(Enumerator, enum)
+
+    x.transform_keys!.with_index {|k, i| "#{k}.#{i}" }
+    assert_equal(%w(a!.0 b!.1 c!.2), x.keys)
   end
 
   def test_transform_values

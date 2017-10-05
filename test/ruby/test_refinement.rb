@@ -70,10 +70,14 @@ class TestRefinement < Test::Unit::TestCase
     end
   end
 
-  eval <<-EOF, Sandbox::BINDING
+  class FooExtClient
     using TestRefinement::FooExt
 
-    class TestRefinement::FooExtClient
+    begin
+      def self.map_x_on(foo)
+        [foo].map(&:x)[0]
+      end
+
       def self.invoke_x_on(foo)
         return foo.x
       end
@@ -97,14 +101,18 @@ class TestRefinement < Test::Unit::TestCase
       def self.invoke_call_x_on(foo)
         return foo.call_x
       end
-    end
-  EOF
 
-  eval <<-EOF, Sandbox::BINDING
+      def self.return_proc(&block)
+        block
+      end
+    end
+  end
+
+  class TestRefinement::FooExtClient2
     using TestRefinement::FooExt
     using TestRefinement::FooExt2
 
-    class TestRefinement::FooExtClient2
+    begin
       def self.invoke_y_on(foo)
         return foo.y
       end
@@ -113,7 +121,7 @@ class TestRefinement < Test::Unit::TestCase
         return foo.a
       end
     end
-  EOF
+  end
 
   def test_override
     foo = Foo.new
@@ -167,10 +175,10 @@ class TestRefinement < Test::Unit::TestCase
     end
   end
 
-  def test_send_should_not_use_refinements
+  def test_send_should_use_refinements
     foo = Foo.new
     assert_raise(NoMethodError) { foo.send(:z) }
-    assert_raise(NoMethodError) { FooExtClient.send_z_on(foo) }
+    assert_equal("FooExt#z", FooExtClient.send_z_on(foo))
     assert_raise(NoMethodError) { foo.send(:z) }
 
     assert_equal(true, RespondTo::Sub.new.respond_to?(:foo))
@@ -345,17 +353,64 @@ class TestRefinement < Test::Unit::TestCase
     assert_equal([:c, :m1, :m2], x)
   end
 
-  def test_refine_module
-    m1 = Module.new
-    assert_raise(TypeError) do
-      Module.new {
-        refine m1 do
-        def foo
-          :m2
-        end
-        end
-      }
+  module RefineModule
+    module M
+      def foo
+        "M#foo"
+      end
+
+      def bar
+        "M#bar"
+      end
+
+      def baz
+        "M#baz"
+      end
     end
+
+    class C
+      include M
+
+      def baz
+        "#{super} C#baz"
+      end
+    end
+
+    module M2
+      refine M do
+        def foo
+          "M@M2#foo"
+        end
+
+        def bar
+          "#{super} M@M2#bar"
+        end
+
+        def baz
+          "#{super} M@M2#baz"
+        end
+      end
+    end
+
+    using M2
+
+    def self.call_foo
+      C.new.foo
+    end
+
+    def self.call_bar
+      C.new.bar
+    end
+
+    def self.call_baz
+      C.new.baz
+    end
+  end
+
+  def test_refine_module
+    assert_equal("M@M2#foo", RefineModule.call_foo)
+    assert_equal("M#bar M@M2#bar", RefineModule.call_bar)
+    assert_equal("M#baz C#baz", RefineModule.call_baz)
   end
 
   def test_refine_neither_class_nor_module
@@ -1419,6 +1474,25 @@ class TestRefinement < Test::Unit::TestCase
     INPUT
   end
 
+  def test_undef_prepended_method
+    bug13096 = '[ruby-core:78944] [Bug #13096]'
+    klass = EnvUtil.labeled_class("X") do
+      def foo; end
+    end
+    klass.prepend(Module.new)
+    ext = EnvUtil.labeled_module("Ext") do
+      refine klass do
+        def foo
+        end
+      end
+    end
+    assert_nothing_raised(NameError, bug13096) do
+      klass.class_eval do
+        undef :foo
+      end
+    end
+  end
+
   def test_call_refined_method_in_duplicate_module
     bug10885 = '[ruby-dev:48878]'
     assert_in_out_err([], <<-INPUT, [], [], bug10885)
@@ -1688,6 +1762,252 @@ class TestRefinement < Test::Unit::TestCase
         end
       end
     INPUT
+  end
+
+  def test_symbol_proc
+    assert_equal("FooExt#x", FooExtClient.map_x_on(Foo.new))
+    assert_equal("Foo#x", FooExtClient.return_proc(&:x).(Foo.new))
+  end
+
+  def test_symbol_proc_with_block
+    assert_separately([], "#{<<~"begin;"}\n#{<<~'end;'}")
+    bug = '[ruby-core:80219] [Bug #13325]'
+    begin;
+      module M
+        refine Class.new do
+        end
+      end
+      class C
+        def call(a, x, &b)
+          b.call(a, &x)
+        end
+      end
+      o = C.new
+      r = nil
+      x = ->(z){r = z}
+      assert_equal(42, o.call(42, x, &:tap))
+      assert_equal(42, r)
+      using M
+      r = nil
+      assert_equal(42, o.call(42, x, &:tap), bug)
+      assert_equal(42, r, bug)
+    end;
+  end
+
+  module AliasInSubclass
+    class C
+      def foo
+        :original
+      end
+    end
+
+    class D < C
+      alias bar foo
+    end
+
+    module M
+      refine D do
+        def bar
+          :refined
+        end
+      end
+    end
+  end
+
+  def test_refine_alias_in_subclass
+    assert_equal(:refined,
+                 eval_using(AliasInSubclass::M, "AliasInSubclass::D.new.bar"))
+  end
+
+  def test_refine_with_prepend
+    assert_separately([], "#{<<-"begin;"}\n#{<<-"end;"}")
+    begin;
+      bug = '[ruby-core:78073] [Bug #12920]'
+      Integer.prepend(Module.new)
+      Module.new do
+        refine Integer do
+          define_method(:+) {}
+        end
+      end
+      assert_kind_of(Time, Time.now, bug)
+    end;
+  end
+
+  def test_public_in_refine
+    assert_separately([], "#{<<-"begin;"}\n#{<<-"end;"}")
+    begin;
+      bug12729 = '[ruby-core:77161] [Bug #12729]'
+
+      class Cow
+        private
+        def moo() "Moo"; end
+      end
+
+      module PublicCows
+        refine(Cow) {
+          public :moo
+        }
+      end
+
+      using PublicCows
+      assert_equal("Moo", Cow.new.moo, bug12729)
+    end;
+  end
+
+  module SuperToModule
+    class Parent
+    end
+
+    class Child < Parent
+    end
+
+    module FooBar
+      refine Parent do
+        def to_s
+          "Parent"
+        end
+      end
+
+      refine Child do
+        def to_s
+          super + " -> Child"
+        end
+      end
+    end
+
+    using FooBar
+    def Child.test
+      new.to_s
+    end
+  end
+
+  def test_super_to_module
+    bug = '[ruby-core:79588] [Bug #13227]'
+    assert_equal("Parent -> Child", SuperToModule::Child.test, bug)
+  end
+
+  def test_include_refinement
+    bug = '[ruby-core:79632] [Bug #13236] cannot include refinement module'
+    r = nil
+    m = Module.new do
+      r = refine(String) {def test;:ok end}
+    end
+    assert_raise_with_message(ArgumentError, /refinement/, bug) do
+      m.module_eval {include r}
+    end
+    assert_raise_with_message(ArgumentError, /refinement/, bug) do
+      m.module_eval {prepend r}
+    end
+  end
+
+  class ParentDefiningPrivateMethod
+    private
+    def some_inherited_method
+    end
+  end
+
+  module MixinDefiningPrivateMethod
+    private
+    def some_included_method
+    end
+  end
+
+  class SomeChildClassToRefine < ParentDefiningPrivateMethod
+    include MixinDefiningPrivateMethod
+
+    private
+    def some_method
+    end
+  end
+
+  def test_refine_inherited_method_with_visibility_changes
+    Module.new do
+      refine(SomeChildClassToRefine) do
+        def some_inherited_method; end
+        def some_included_method; end
+        def some_method; end
+      end
+    end
+
+    obj = SomeChildClassToRefine.new
+
+    assert_raise_with_message(NoMethodError, /private/) do
+      obj.some_inherited_method
+    end
+
+    assert_raise_with_message(NoMethodError, /private/) do
+      obj.some_included_method
+    end
+
+    assert_raise_with_message(NoMethodError, /private/) do
+      obj.some_method
+    end
+  end
+
+  def test_refined_method_alias_warning
+    c = Class.new do
+      def t; :t end
+      def f; :f end
+    end
+    Module.new do
+      refine(c) do
+        alias foo t
+      end
+    end
+    assert_warning('', '[ruby-core:82385] [Bug #13817] refined method is not redefined') do
+      c.class_eval do
+        alias foo f
+      end
+    end
+  end
+
+  def test_using_wrong_argument
+    bug = '[ruby-dev:50270] [Bug #13956]'
+    pattern = /expected Module/
+    assert_separately([], "#{<<-"begin;"}\n#{<<-'end;'}")
+    bug = ""#{bug.dump}
+    pattern = /#{pattern}/
+    begin;
+      assert_raise_with_message(TypeError, pattern, bug) {
+        using(1) do end
+      }
+    end;
+    assert_separately([], "#{<<-"begin;"}\n#{<<-'end;'}")
+    bug = ""#{bug.dump}
+    pattern = /#{pattern}/
+    begin;
+      assert_raise_with_message(TypeError, pattern, bug) {
+        Module.new {using(1) {}}
+      }
+    end;
+  end
+
+  class ToString
+    c = self
+    using Module.new {refine(c) {def to_s; "ok"; end}}
+    def string
+      "#{self}"
+    end
+  end
+
+  def test_tostring
+    assert_equal("ok", ToString.new.string)
+    assert_predicate(ToString.new.taint.string, :tainted?)
+  end
+
+  class ToSymbol
+    c = self
+    using Module.new {refine(c) {def intern; "<#{upcase}>"; end}}
+    def symbol
+      :"#{@string}"
+    end
+    def initialize(string)
+      @string = string
+    end
+  end
+
+  def test_dsym_literal
+    assert_equal(:foo, ToSymbol.new("foo").symbol)
   end
 
   private

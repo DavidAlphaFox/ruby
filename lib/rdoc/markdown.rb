@@ -521,7 +521,6 @@ class RDoc::Markdown
 
 
 
-  require 'rubygems'
   require 'rdoc'
   require 'rdoc/markup/to_joined_paragraph'
   require 'rdoc/markdown/entities'

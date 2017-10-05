@@ -34,6 +34,19 @@ class TestThread < Test::Unit::TestCase
     th.join
   end
 
+  def test_inspect_with_fiber
+    inspect1 = inspect2 = nil
+
+    Thread.new{
+      inspect1 = Thread.current.inspect
+      Fiber.new{
+        inspect2 = Thread.current.inspect
+      }.resume
+    }.join
+
+    assert_equal inspect1, inspect2, '[Bug #13689]'
+  end
+
   def test_main_thread_variable_in_enumerator
     assert_equal Thread.main, Thread.current
 
@@ -174,6 +187,14 @@ class TestThread < Test::Unit::TestCase
   ensure
     t1.kill if t1
     t2.kill if t2
+  end
+
+  def test_new_symbol_proc
+    bug = '[ruby-core:80147] [Bug #13313]'
+    assert_ruby_status([], "#{<<-"begin;"}\n#{<<-'end;'}", bug)
+    begin;
+      exit("1" == Thread.start(1, &:to_s).value)
+    end;
   end
 
   def test_join
@@ -345,7 +366,8 @@ class TestThread < Test::Unit::TestCase
   end
 
   def test_report_on_exception
-    assert_separately([], <<~"end;") #do
+    assert_separately([], "#{<<~"begin;"}\n#{<<~'end;'}")
+    begin;
       q1 = Thread::Queue.new
       q2 = Thread::Queue.new
 
@@ -396,6 +418,19 @@ class TestThread < Test::Unit::TestCase
         }
         assert_equal(true, q1.pop)
         Thread.pass while th.alive?
+      }
+
+      assert_warn(/report 5/, "should defaults to the global flag at the start") {
+        th = Thread.start {
+          Thread.current.report_on_exception = true
+          Thread.current.abort_on_exception = true
+          q2.pop
+          raise "report 5"
+        }
+        assert_raise_with_message(RuntimeError, "report 5") {
+          q2.push(true)
+          Thread.pass while th.alive?
+        }
       }
     end;
   end
@@ -476,8 +511,38 @@ class TestThread < Test::Unit::TestCase
     assert_equal(false, t.key?(:qux))
     assert_equal(false, t.key?("qux"))
 
-    assert_equal([:foo, :bar, :baz], t.keys)
+    assert_equal([:foo, :bar, :baz].sort, t.keys.sort)
 
+  ensure
+    t.kill if t
+  end
+
+  def test_thread_local_fetch
+    t = Thread.new { sleep }
+
+    assert_equal(false, t.key?(:foo))
+
+    t["foo"] = "foo"
+    t["bar"] = "bar"
+    t["baz"] = "baz"
+
+    x = nil
+    assert_equal("foo", t.fetch(:foo, 0))
+    assert_equal("foo", t.fetch(:foo) {x = true})
+    assert_nil(x)
+    assert_equal("foo", t.fetch("foo", 0))
+    assert_equal("foo", t.fetch("foo") {x = true})
+    assert_nil(x)
+
+    x = nil
+    assert_equal(0, t.fetch(:qux, 0))
+    assert_equal(1, t.fetch(:qux) {x = 1})
+    assert_equal(1, x)
+    assert_equal(2, t.fetch("qux", 2))
+    assert_equal(3, t.fetch("qux") {x = 3})
+    assert_equal(3, x)
+
+    assert_raise(KeyError) {t.fetch(:qux)}
   ensure
     t.kill if t
   end
@@ -602,7 +667,7 @@ class TestThread < Test::Unit::TestCase
   end
 
   def test_no_valid_cfp
-    skip 'with win32ole, cannot run this testcase because win32ole redefines Thread#intialize' if defined?(WIN32OLE)
+    skip 'with win32ole, cannot run this testcase because win32ole redefines Thread#initialize' if defined?(WIN32OLE)
     bug5083 = '[ruby-dev:44208]'
     assert_equal([], Thread.new(&Module.method(:nesting)).value, bug5083)
     assert_instance_of(Thread, Thread.new(:to_s, &Class.new.method(:undef_method)).join, bug5083)
@@ -610,14 +675,14 @@ class TestThread < Test::Unit::TestCase
 
   def make_handle_interrupt_test_thread1 flag
     r = []
-    ready_p = false
-    done = false
+    ready_q = Queue.new
+    done_q = Queue.new
     th = Thread.new{
       begin
         Thread.handle_interrupt(RuntimeError => flag){
           begin
-            ready_p = true
-            sleep 0.01 until done
+            ready_q << true
+            done_q.pop
           rescue
             r << :c1
           end
@@ -626,10 +691,10 @@ class TestThread < Test::Unit::TestCase
         r << :c2
       end
     }
-    Thread.pass until ready_p
+    ready_q.pop
     th.raise
     begin
-      done = true
+      done_q << true
       th.join
     rescue
       r << :c3
@@ -836,24 +901,24 @@ _eom
 
   def test_thread_timer_and_interrupt
     bug5757 = '[ruby-dev:44985]'
-    t0 = Time.now.to_f
     pid = nil
     cmd = 'Signal.trap(:INT, "DEFAULT"); r,=IO.pipe; Thread.start {Thread.pass until Thread.main.stop?; puts; STDOUT.flush}; r.read'
     opt = {}
     opt[:new_pgroup] = true if /mswin|mingw/ =~ RUBY_PLATFORM
-    s, _err = EnvUtil.invoke_ruby(['-e', cmd], "", true, true, opt) do |in_p, out_p, err_p, cpid|
+    s, t, _err = EnvUtil.invoke_ruby(['-e', cmd], "", true, true, opt) do |in_p, out_p, err_p, cpid|
       out_p.gets
       pid = cpid
+      t0 = Time.now.to_f
       Process.kill(:SIGINT, pid)
       Process.wait(pid)
-      [$?, err_p.read]
+      t1 = Time.now.to_f
+      [$?, t1 - t0, err_p.read]
     end
-    t1 = Time.now.to_f
     assert_equal(pid, s.pid, bug5757)
     assert_equal([false, true, false, Signal.list["INT"]],
                  [s.exited?, s.signaled?, s.stopped?, s.termsig],
                  "[s.exited?, s.signaled?, s.stopped?, s.termsig]")
-    assert_in_delta(t1 - t0, 1, 1, bug5757)
+    assert_include(0..2, t, bug5757)
   end
 
   def test_thread_join_in_trap
@@ -1097,9 +1162,9 @@ q.pop
       end
       Process.wait2(f.pid)
     end
-    unless th.join(3)
+    unless th.join(EnvUtil.apply_timeout_scale(30))
       Process.kill(:QUIT, f.pid)
-      Process.kill(:KILL, f.pid) unless th.join(1)
+      Process.kill(:KILL, f.pid) unless th.join(EnvUtil.apply_timeout_scale(1))
     end
     _, status = th.value
     output = f.read
@@ -1159,5 +1224,15 @@ q.pop
     bug12290 = '[ruby-core:74963] [Bug #12290]'
     c = Class.new(Thread) {def initialize() self.name = "foo"; super; end}
     assert_equal("foo", c.new {Thread.current.name}.value, bug12290)
+  end
+
+  def test_thread_interrupt_for_killed_thread
+    assert_normal_exit(<<-_end, '[Bug #8996]', timeout: 5, timeout_error: nil)
+      trap(:TERM){exit}
+      while true
+        t = Thread.new{sleep 0}
+        t.raise Interrupt
+      end
+    _end
   end
 end

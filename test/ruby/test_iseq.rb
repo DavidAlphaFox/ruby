@@ -1,4 +1,5 @@
 require 'test/unit'
+require 'tempfile'
 
 class TestISeq < Test::Unit::TestCase
   ISeq = RubyVM::InstructionSequence
@@ -185,12 +186,14 @@ class TestISeq < Test::Unit::TestCase
     assert_predicate(s4, :frozen?)
   end
 
+  # Safe call chain is not optimized when Coverage is running.
+  # So we can test it only when Coverage is not running.
   def test_safe_call_chain
     src = "a&.a&.a&.a&.a&.a"
     body = compile(src, __LINE__, {peephole_optimization: true}).to_a[13]
     labels = body.select {|op, arg| op == :branchnil}.map {|op, arg| arg}
     assert_equal(1, labels.uniq.size)
-  end
+  end if (!defined?(Coverage) || !Coverage.running?)
 
   def test_parent_iseq_mark
     assert_separately([], <<-'end;', timeout: 20)
@@ -243,6 +246,23 @@ class TestISeq < Test::Unit::TestCase
     assert_send([e2, :start_with?, __FILE__])
   end
 
+  def test_compile_file_error
+    Tempfile.create(%w"test_iseq .rb") do |f|
+      f.puts "end"
+      f.close
+      path = f.path
+      assert_in_out_err(%W[- #{path}], "#{<<-"begin;"}\n#{<<-"end;"}", /keyword_end/, [], success: true)
+      begin;
+        path = ARGV[0]
+        begin
+          RubyVM::InstructionSequence.compile_file(path)
+        rescue SyntaxError => e
+          puts e.message
+        end
+      end;
+    end
+  end
+
   def test_translate_by_object
     assert_separately([], <<-"end;")
       class Object
@@ -251,5 +271,13 @@ class TestISeq < Test::Unit::TestCase
       end
       assert_equal(0, eval("0"))
     end;
+  end
+
+  def test_inspect
+    %W[foo \u{30d1 30b9}].each do |name|
+      assert_match /@#{name}/, ISeq.compile("", name).inspect, name
+      m = ISeq.compile("class TestISeq::Inspect; def #{name}; end; instance_method(:#{name}); end").eval
+      assert_match /:#{name}@/, ISeq.of(m).inspect, name
+    end
   end
 end

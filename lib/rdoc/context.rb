@@ -99,6 +99,11 @@ class RDoc::Context < RDoc::CodeObject
   attr_accessor :visibility
 
   ##
+  # Current visibility of this line
+
+  attr_writer :current_line_visibility
+
+  ##
   # Hash of registered methods. Attributes are also registered here,
   # twice if they are RW.
 
@@ -148,6 +153,7 @@ class RDoc::Context < RDoc::CodeObject
     @extends     = []
     @constants   = []
     @external_aliases = []
+    @current_line_visibility = nil
 
     # This Hash maps a method name to a list of unmatched aliases (aliases of
     # a method not yet encountered).
@@ -327,7 +333,7 @@ class RDoc::Context < RDoc::CodeObject
     if full_name == 'BasicObject' then
       superclass = nil
     elsif full_name == 'Object' then
-      superclass = defined?(::BasicObject) ? '::BasicObject' : nil
+      superclass = '::BasicObject'
     end
 
     # find the superclass full name
@@ -478,7 +484,11 @@ class RDoc::Context < RDoc::CodeObject
       end
     else
       @methods_hash[key] = method
-      method.visibility = @visibility
+      if @current_line_visibility
+        method.visibility, @current_line_visibility = @current_line_visibility, nil
+      else
+        method.visibility = @visibility
+      end
       add_to @method_list, method
       resolve_aliases method
     end
@@ -752,7 +762,7 @@ class RDoc::Context < RDoc::CodeObject
     attributes.default = []
 
     sort_sections.each do |section|
-      yield section, constants[section].sort, attributes[section].sort
+      yield section, constants[section].select(&:display?).sort, attributes[section].select(&:display?).sort
     end
   end
 
@@ -1069,6 +1079,7 @@ class RDoc::Context < RDoc::CodeObject
     return if [:private, :nodoc].include? min_visibility
     remove_invisible_in @method_list, min_visibility
     remove_invisible_in @attributes, min_visibility
+    remove_invisible_in @constants, min_visibility
   end
 
   ##
@@ -1156,6 +1167,17 @@ class RDoc::Context < RDoc::CodeObject
   end
 
   ##
+  # Given an array +names+ of constants, set the visibility of each constant to
+  # +visibility+
+
+  def set_constant_visibility_for(names, visibility)
+    names.each do |name|
+      constant = @constants_hash[name] or next
+      constant.visibility = visibility
+    end
+  end
+
+  ##
   # Sorts sections alphabetically (default) or in TomDoc fashion (none,
   # Public, Internal, Deprecated)
 
@@ -1211,4 +1233,3 @@ class RDoc::Context < RDoc::CodeObject
   autoload :Section, 'rdoc/context/section'
 
 end
-
